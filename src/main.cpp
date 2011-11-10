@@ -1,0 +1,153 @@
+#include <iostream>
+#include <fstream>
+#include <list>
+#include <map>
+#include "atom.hpp"
+#include "snapshot.hpp"
+
+bool load_snapshot(std::ifstream& fi, size_t atoms_count, Snapshot* ss);
+
+////////////////////////////////////////////////////////////////////////////////
+// Config
+//
+class Config
+{
+public:
+    ~Config();
+    static Config* instance()
+    {
+        if (instance == NULL)
+        {
+            instance_ = new Config;
+        }
+        return instance_;
+    }
+    
+    void load_config_file(const char* filepath);
+    
+//private:
+    Config() : atoms_(), calc_pairs_(), ss_size_(0), ss_range_(0, 0) {}
+    Config(const Config& other);
+    Config& operator=(const Config& rhs);
+    
+    bool validate();
+    
+    void add_atom(const std::string& name, int serial, double charge)
+    { atoms_[name] = std::make_pair(serial, charge); }
+    
+    void add_calc_pair(const std::string& atom1, const std::string& atom2)
+    {
+        for (std::list<std::pair<std::string, std::string> >::iterator it =
+            calc_pairs_.begin(); it != calc_pairs_.end(); ++ it)
+        {
+            if (it->first == atom1 && it->second == atom2)
+                return;
+        }
+        calc_pairs_.push_back(std::make_pair(atom1, atom2));
+    }
+    
+    static Config* instance_;
+    
+    std::map<std::string, std::pair<int, double> > atoms_;
+    std::list<std::pair<std::string, std::string> > calc_pairs_;
+    size_t ss_size_;
+    std::pair<unsigned int, unsigned int> ss_range_; // start and count
+};
+
+Config* Config::instance_ = NULL;
+
+
+
+
+int main(int argc, char** argv)
+{
+    const char* filepath = "test.crd";
+    const char* config_filepath = "config.txt";
+    
+    Config& config = *Config::instance();
+    config.add_atom("N1", 1031, -0.415700);
+    config.add_atom("H1", 1032, 0.271900);
+    config.add_atom("C1", 1084, 0.597300);
+    config.add_atom("O1", 1085, -0.567900);
+    config.add_calc_pair("N1", "C1");
+    config.add_calc_pair("H1", "C1");
+    config.add_calc_pair("N1", "O1");
+    config.add_calc_pair("H1", "O1");
+    config.ss_size_ = 1773;
+    config.ss_range_ = std::make_pair(0, 0);
+    
+    std::ifstream fi(filepath);
+    if (!fi.is_open())
+    {
+        std::cout << "File open failed: " << filepath << std::endl;
+        return -1;
+    }
+    
+    // read the first dummy line
+    std::string line;
+    getline(fi, line);
+    
+    // load each snapshot
+    std::list<Snapshot *> ss_list;
+    unsigned int n = 0;
+    unsigned int ss_start = config.ss_range_.first;
+    unsigned int ss_end = config.ss_range_.first + config.ss_range_.second;
+    size_t count = config.ss_size_;
+    Snapshot* ss = NULL;
+    while (true)
+    {
+        if (n >= ss_start && n < ss_end) // in range
+        {
+            Snapshot* ss = new Snapshot;
+            if (!load_snapshot(fi, count, ss))
+                break;
+            std::cout << "LOADED Snapshot [" << n << "]" << std::endl;
+            ss_list.push_back(ss);
+        }
+        else // out of range
+        {
+            load_snapshot(fi, count, NULL);
+            std::cout << "SKIPPED Snapshot [" << n << "]" << std::endl;
+            if (n >= ss_end) // beyond ending point
+                break;
+        }
+
+        ++ n;
+    }
+    fi.close();
+    
+    for (std::list<Snapshot *>::iterator it = ss_list.begin();
+        it != ss_list.end(); ++ it)
+    {
+        delete *it;
+    }
+    
+    return 0;
+}
+
+//------------------------------------------------------------------------------
+// Load a snapshot from file.
+//------------------------------------------------------------------------------
+bool load_snapshot(std::ifstream& fi, size_t atoms_count, Snapshot* ss)
+{
+    double x(0.0), y(0.0), z(0.0);
+    Atom* atom = NULL;
+    if (ss != NULL)
+        ss->clear();
+    for (size_t i = 0; i < atoms_count; ++ i)
+    {
+        fi >> x >> y >> z;
+        if (!fi.good())
+            return false;
+        //std::cout << x << " " << y << " "  << z << " "  << std::endl;
+        if (NULL != ss)
+        {
+            atom = new Atom;
+            atom->set_coordinates(x, y, z);
+            ss->add(atom);
+        }
+    }
+    return true;
+}
+
+
