@@ -2,10 +2,9 @@
 #include <fstream>
 #include <list>
 #include <map>
+#include <numeric>
 #include "atom.hpp"
 #include "snapshot.hpp"
-
-bool load_snapshot(std::ifstream& fi, size_t atoms_count, Snapshot* ss);
 
 ////////////////////////////////////////////////////////////////////////////////
 // Config
@@ -16,8 +15,9 @@ public:
     ~Config();
     static Config* instance()
     {
-        if (instance == NULL)
+        if (instance_ == NULL)
         {
+            std::cout << "Create Config instance." << std::endl;
             instance_ = new Config;
         }
         return instance_;
@@ -26,7 +26,9 @@ public:
     void load_config_file(const char* filepath);
     
 //private:
-    Config() : atoms_(), calc_pairs_(), ss_size_(0), ss_range_(0, 0) {}
+    Config() 
+        : atoms_(), calc_pairs_(), ss_range_(0, 0), ss_size_(0)
+        , scale_factor_(1.0) {}
     Config(const Config& other);
     Config& operator=(const Config& rhs);
     
@@ -50,14 +52,17 @@ public:
     
     std::map<std::string, std::pair<int, double> > atoms_;
     std::list<std::pair<std::string, std::string> > calc_pairs_;
-    size_t ss_size_;
     std::pair<unsigned int, unsigned int> ss_range_; // start and count
+    size_t ss_size_;
+    double scale_factor_;
 };
 
 Config* Config::instance_ = NULL;
 
 
 
+bool load_snapshot(std::ifstream& fi, size_t atoms_count, Snapshot* ss);
+double calculate_energy(const Snapshot& ss, const Config& config);
 
 int main(int argc, char** argv)
 {
@@ -75,6 +80,7 @@ int main(int argc, char** argv)
     config.add_calc_pair("H1", "O1");
     config.ss_size_ = 1773;
     config.ss_range_ = std::make_pair(0, 0);
+    config.scale_factor_ = 331.5;
     
     std::ifstream fi(filepath);
     if (!fi.is_open())
@@ -87,22 +93,27 @@ int main(int argc, char** argv)
     std::string line;
     getline(fi, line);
     
-    // load each snapshot
-    std::list<Snapshot *> ss_list;
+    // load snapshots
+    //std::list<Snapshot *> ss_list;
     unsigned int n = 0;
     unsigned int ss_start = config.ss_range_.first;
     unsigned int ss_end = config.ss_range_.first + config.ss_range_.second;
     size_t count = config.ss_size_;
-    Snapshot* ss = NULL;
+    //Snapshot* ss = NULL;
+    Snapshot ss;
+    std::list<double> energy_list;
     while (true)
     {
-        if (n >= ss_start && n < ss_end) // in range
+        if (n >= ss_start && (n < ss_end || 0 == config.ss_range_.second)) // in range
         {
-            Snapshot* ss = new Snapshot;
-            if (!load_snapshot(fi, count, ss))
+            //Snapshot* ss = new Snapshot;
+            //if (!load_snapshot(fi, count, ss))
+            if (!load_snapshot(fi, count, &ss))
                 break;
             std::cout << "LOADED Snapshot [" << n << "]" << std::endl;
-            ss_list.push_back(ss);
+            //ss_list.push_back(ss);
+            
+            energy_list.push_back(calculate_energy(ss, config));
         }
         else // out of range
         {
@@ -111,16 +122,14 @@ int main(int argc, char** argv)
             if (n >= ss_end) // beyond ending point
                 break;
         }
-
         ++ n;
     }
     fi.close();
     
-    for (std::list<Snapshot *>::iterator it = ss_list.begin();
-        it != ss_list.end(); ++ it)
-    {
-        delete *it;
-    }
+    // calculate average energy
+    std::cout << "Average: " <<
+        std::accumulate(energy_list.begin(), energy_list.end(), 0.0) 
+        / energy_list.size() << std::endl;
     
     return 0;
 }
@@ -150,4 +159,48 @@ bool load_snapshot(std::ifstream& fi, size_t atoms_count, Snapshot* ss)
     return true;
 }
 
+double calculate_energy(const Snapshot& ss, const Config& config)
+{
+    // retrieve atoms
+    Atom* atom = NULL;
+    std::map<std::string, Atom *> atoms;
+    for (std::map<std::string, std::pair<int, double> >::const_iterator it1 =
+        config.atoms_.begin(); it1 != config.atoms_.end(); ++ it1)
+    {
+        atom = ss.get(it1->second.first);
+        if (atom)
+        {
+            atoms[it1->first] = atom;
+            atom->set_charge(it1->second.second);
+        }
+    }
+    // calculate
+    Atom* other_atom = NULL;
+    std::map<std::string, Atom *>::iterator it3;
+    double energy = 0.0;
+    double total_energy = 0.0;
+    double distance = 0.0;
+    for (std::list<std::pair<std::string, std::string> >::const_iterator it2 =
+        config.calc_pairs_.begin(); config.calc_pairs_.end() != it2; 
+        ++ it2)
+    {
+        it3 = atoms.find(it2->first);
+        if (it3 == atoms.end() || it3->second == NULL)
+            continue;
+        atom = it3->second;
+        it3 = atoms.find(it2->second);
+        if (it3 == atoms.end() || it3->second == NULL)
+            continue;
+        other_atom = it3->second;
+        
+        distance = atom->distance_from(*other_atom);
+        
+        energy = atom->charge() * other_atom->charge() / distance 
+            * config.scale_factor_;
+        total_energy += energy;
+        
+        std::cout << energy << '\t' << total_energy << std::endl;
+    }
+    return total_energy;
+}
 
