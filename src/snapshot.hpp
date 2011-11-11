@@ -25,7 +25,7 @@ public:
             atoms_.push_back(atom);
     }
     
-    Atom* get(unsigned int serial)
+    Atom* get(unsigned int serial) const
     {
         return (serial > 0 && serial <= atoms_.size()) ? atoms_[serial - 1] : NULL;
     }
